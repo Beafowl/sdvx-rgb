@@ -5,13 +5,14 @@ Minimal web API + frontend for editing sdvxrgb.ini.
 Uses only the Python standard library (no Flask/etc).
 
 Usage:
-    python sdvx_rgb_web.py [profile_name] [--ini PATH] [--host HOST] [--port PORT]
+    python sdvx_rgb_web.py [--ini PATH] [--host HOST] [--port PORT]
 
 Then open http://localhost:8274 in a browser.
 """
 
 import argparse
 import configparser
+import filecmp
 import json
 import os
 import re
@@ -127,6 +128,17 @@ def delete_profile(name):
     os.remove(path)
     if CURRENT_PROFILE == name:
         CURRENT_PROFILE = None
+
+
+def detect_current_profile():
+    """Set CURRENT_PROFILE by matching INI_PATH contents against saved profiles."""
+    global CURRENT_PROFILE
+    if not os.path.exists(INI_PATH):
+        return
+    for name in list_profiles():
+        if filecmp.cmp(INI_PATH, _profile_path(name), shallow=False):
+            CURRENT_PROFILE = name
+            return
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -285,12 +297,6 @@ def main():
 
     parser = argparse.ArgumentParser(description="SDVX RGB Web API")
     parser.add_argument(
-        "profile",
-        nargs="?",
-        default=None,
-        help="Profile name to load on startup",
-    )
-    parser.add_argument(
         "--ini",
         default=default_ini,
         help="Path to sdvxrgb.ini (default: %(default)s)",
@@ -308,15 +314,17 @@ def main():
 
     INI_PATH = os.path.abspath(args.ini)
 
-    if args.profile:
-        profile_file = _profile_path(args.profile)
-        if os.path.exists(profile_file):
-            load_profile(args.profile)
-            print(f"  Loaded profile: {args.profile}")
-        else:
-            print(
-                f"  Warning: Profile '{args.profile}' not found, starting without profile"
-            )
+    if not os.path.exists(INI_PATH):
+        os.makedirs(os.path.dirname(INI_PATH), exist_ok=True)
+        lines = []
+        for name in STRIP_NAMES:
+            lines.append(f"[{name}]")
+            lines.append("")
+        with open(INI_PATH, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines))
+        print(f"  Created new INI file: {INI_PATH}")
+
+    detect_current_profile()
 
     server = HTTPServer((args.host, args.port), Handler)
     print(f"SDVX RGB Web API")

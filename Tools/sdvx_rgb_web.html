@@ -148,11 +148,6 @@
             }
 
             /* Buttons */
-            .btn-row {
-                display: flex;
-                gap: 10px;
-                margin-top: 20px;
-            }
             button {
                 background: var(--surface2);
                 color: var(--text);
@@ -271,8 +266,7 @@
             <span id="status" class="status ok">loading...</span>
         </h1>
         <p class="subtitle">
-            Edit sdvxrgb.ini via web. Changes are saved to disk and hot-reloaded
-            by the hook.
+            Edit sdvxrgb.ini via web. Changes are saved to disk immediately.
         </p>
 
         <div id="profile-bar" class="profile-bar" style="display: none">
@@ -293,11 +287,6 @@
         </div>
 
         <div id="app"></div>
-
-        <div class="btn-row">
-            <button class="primary" onclick="save()">Save</button>
-            <button onclick="load()">Reload from disk</button>
-        </div>
 
         <script>
             const STRIP_LABELS = {
@@ -445,6 +434,7 @@
                         if (currentVal.toUpperCase() === opt) o.selected = true;
                         sel.appendChild(o);
                     }
+                    sel.addEventListener("change", () => save());
                     row.appendChild(sel);
                 } else if (field.type === "color") {
                     const colorInput = document.createElement("input");
@@ -475,6 +465,7 @@
                         colorInput._enabled = true;
                         hexLabel.textContent = inputToHex(colorInput.value);
                         clearBtn.textContent = "clear";
+                        save();
                     });
                     clearBtn.addEventListener("click", () => {
                         if (colorInput._enabled) {
@@ -486,6 +477,7 @@
                             hexLabel.textContent = inputToHex(colorInput.value);
                             clearBtn.textContent = "clear";
                         }
+                        save();
                     });
                 } else {
                     const input = document.createElement("input");
@@ -497,6 +489,7 @@
                     if (field.max) input.max = field.max;
                     input.value = currentVal;
                     input.placeholder = "(default)";
+                    input.addEventListener("change", () => save());
                     row.appendChild(input);
                 }
 
@@ -597,6 +590,7 @@
                     if (!src) return;
                     writeSectionValues(section, readSectionValues(src));
                     sel.value = "";
+                    save();
                 });
                 row.appendChild(btn);
 
