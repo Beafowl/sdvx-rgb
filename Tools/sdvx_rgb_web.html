@@ -187,6 +187,57 @@
                 background: transparent;
             }
 
+            /* Profile bar */
+            .profile-bar {
+                background: var(--surface);
+                border: 1px solid var(--border);
+                border-radius: 8px;
+                padding: 12px 16px;
+                margin-bottom: 16px;
+                display: flex;
+                align-items: center;
+                gap: 10px;
+                flex-wrap: wrap;
+            }
+            .profile-bar label {
+                font-size: 0.85rem;
+                color: var(--text-dim);
+                flex-shrink: 0;
+            }
+            .profile-bar select {
+                background: var(--bg);
+                border: 1px solid var(--border);
+                color: var(--text);
+                padding: 5px 8px;
+                border-radius: 4px;
+                font-size: 0.85rem;
+                min-width: 150px;
+            }
+            .profile-bar input[type="text"] {
+                background: var(--bg);
+                border: 1px solid var(--border);
+                color: var(--text);
+                padding: 5px 8px;
+                border-radius: 4px;
+                font-size: 0.85rem;
+                width: 150px;
+            }
+            .profile-bar button {
+                font-size: 0.8rem;
+                padding: 5px 12px;
+            }
+            .profile-bar .profile-active {
+                font-size: 0.8rem;
+                color: var(--accent);
+                font-weight: 600;
+            }
+            .profile-sep {
+                width: 1px;
+                height: 24px;
+                background: var(--border);
+                flex-shrink: 0;
+            }
+
             /* Copy-from controls */
             .copy-row {
                 display: flex;
@@ -223,6 +274,23 @@
             Edit sdvxrgb.ini via web. Changes are saved to disk and hot-reloaded
             by the hook.
         </p>
+
+        <div id="profile-bar" class="profile-bar" style="display: none">
+            <label>Profile:</label>
+            <select id="profile-select">
+                <option value="">(none)</option>
+            </select>
+            <button onclick="loadProfile()">Load</button>
+            <button onclick="deleteProfile()">Delete</button>
+            <div class="profile-sep"></div>
+            <input
+                type="text"
+                id="profile-name"
+                placeholder="New profile name"
+            />
+            <button onclick="saveProfile()">Save</button>
+            <span id="profile-active" class="profile-active"></span>
+        </div>
 
         <div id="app"></div>
 
@@ -330,6 +398,8 @@
 
             let config = {};
             let strips = [];
+            let profiles = [];
+            let currentProfile = null;
 
             function setStatus(msg, ok) {
                 const el = document.getElementById("status");
@@ -652,10 +722,121 @@
                     const json = await res.json();
                     strips = json.strips;
                     config = json.config;
+                    profiles = json.profiles || [];
+                    currentProfile = json.current_profile || null;
                     render();
+                    updateProfileBar();
                     setStatus("loaded", true);
                 } catch (e) {
                     setStatus("load failed: " + e.message, false);
+                }
+            }
+
+            function updateProfileBar() {
+                const bar = document.getElementById("profile-bar");
+                bar.style.display = "flex";
+
+                const sel = document.getElementById("profile-select");
+                sel.innerHTML = '<option value="">(none)</option>';
+                for (const p of profiles) {
+                    const o = document.createElement("option");
+                    o.value = p;
+                    o.textContent = p;
+                    if (p === currentProfile) o.selected = true;
+                    sel.appendChild(o);
+                }
+
+                const activeLabel = document.getElementById("profile-active");
+                activeLabel.textContent = currentProfile
+                    ? "Active: " + currentProfile
+                    : "";
+
+                const nameInput = document.getElementById("profile-name");
+                if (currentProfile && !nameInput.value) {
+                    nameInput.value = currentProfile;
+                }
+            }
+
+            async function saveProfile() {
+                const nameInput = document.getElementById("profile-name");
+                const name = nameInput.value.trim();
+                if (!name) {
+                    setStatus("enter a profile name", false);
+                    return;
+                }
+                try {
+                    const res = await fetch("/api/profiles/save", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ name }),
+                    });
+                    const json = await res.json();
+                    if (json.ok) {
+                        profiles = json.profiles;
+                        currentProfile = json.current_profile;
+                        updateProfileBar();
+                        setStatus("profile saved: " + name, true);
+                    } else {
+                        setStatus("error: " + (json.error || "unknown"), false);
+                    }
+                } catch (e) {
+                    setStatus("save profile failed: " + e.message, false);
+                }
+            }
+
+            async function loadProfile() {
+                const sel = document.getElementById("profile-select");
+                const name = sel.value;
+                if (!name) {
+                    setStatus("select a profile to load", false);
+                    return;
+                }
+                try {
+                    const res = await fetch("/api/profiles/load", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ name }),
+                    });
+                    const json = await res.json();
+                    if (json.ok) {
+                        config = json.config;
+                        currentProfile = json.current_profile;
+                        render();
+                        updateProfileBar();
+                        setStatus("profile loaded: " + name, true);
+                    } else {
+                        setStatus("error: " + (json.error || "unknown"), false);
+                    }
+                } catch (e) {
+                    setStatus("load profile failed: " + e.message, false);
+                }
+            }
+
+            async function deleteProfile() {
+                const sel = document.getElementById("profile-select");
+                const name = sel.value;
+                if (!name) {
+                    setStatus("select a profile to delete", false);
+                    return;
+                }
+                if (!confirm("Delete profile '" + name + "'?")) return;
+                try {
+                    const res = await fetch("/api/profiles/delete", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ name }),
+                    });
+                    const json = await res.json();
+                    if (json.ok) {
+                        profiles = json.profiles;
+                        currentProfile = json.current_profile;
+                        updateProfileBar();
+                        setStatus("profile deleted: " + name, true);
+                    } else {
+                        setStatus("error: " + (json.error || "unknown"), false);
+                    }
+                } catch (e) {
+                    setStatus("delete profile failed: " + e.message, false);
                 }
             }
 

@@ -5,7 +5,7 @@ Minimal web API + frontend for editing sdvxrgb.ini.
 Uses only the Python standard library (no Flask/etc).
 
 Usage:
-    python sdvx_rgb_web.py [path_to_sdvxrgb.ini] [--host HOST] [--port PORT]
+    python sdvx_rgb_web.py [profile_name] [--ini PATH] [--host HOST] [--port PORT]
 
 Then open http://localhost:8274 in a browser.
 """
@@ -14,6 +14,8 @@ import argparse
 import configparser
 import json
 import os
+import re
+import shutil
 import sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse
@@ -44,6 +46,8 @@ STRIP_KEYS = [
 ]
 
 INI_PATH = ""
+PROFILES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "profiles")
+CURRENT_PROFILE = None
 FRONTEND_PATH = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "sdvx_rgb_web.html"
 )
@@ -76,6 +80,53 @@ def write_ini(data):
         lines.append("")
     with open(INI_PATH, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
+
+
+def _valid_profile_name(name):
+    """Check that profile name is safe for use as a filename."""
+    return bool(name) and bool(re.match(r"^[A-Za-z0-9 _\-]+$", name))
+
+
+def _profile_path(name):
+    return os.path.join(PROFILES_DIR, name + ".ini")
+
+
+def list_profiles():
+    """Return sorted list of profile names (without .ini extension)."""
+    os.makedirs(PROFILES_DIR, exist_ok=True)
+    profiles = []
+    for f in os.listdir(PROFILES_DIR):
+        if f.lower().endswith(".ini"):
+            profiles.append(f[:-4])
+    profiles.sort(key=str.lower)
+    return profiles
+
+
+def save_profile(name):
+    """Save the current INI file as a profile."""
+    os.makedirs(PROFILES_DIR, exist_ok=True)
+    shutil.copy2(INI_PATH, _profile_path(name))
+
+
+def load_profile(name):
+    """Load a profile into the current INI file."""
+    global CURRENT_PROFILE
+    src = _profile_path(name)
+    if not os.path.exists(src):
+        raise FileNotFoundError(f"Profile '{name}' not found")
+    shutil.copy2(src, INI_PATH)
+    CURRENT_PROFILE = name
+
+
+def delete_profile(name):
+    """Delete a saved profile."""
+    global CURRENT_PROFILE
+    path = _profile_path(name)
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"Profile '{name}' not found")
+    os.remove(path)
+    if CURRENT_PROFILE == name:
+        CURRENT_PROFILE = None
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -127,6 +178,8 @@ class Handler(BaseHTTPRequestHandler):
                     "strips": STRIP_NAMES,
                     "keys": STRIP_KEYS,
                     "config": read_ini(),
+                    "profiles": list_profiles(),
+                    "current_profile": CURRENT_PROFILE,
                 }
             )
             return
@@ -148,12 +201,80 @@ class Handler(BaseHTTPRequestHandler):
                 self._json_response({"error": str(e)}, status=400)
             return
 
+        if path == "/api/profiles/save":
+            length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(length)
+            try:
+                data = json.loads(body)
+                name = data.get("name", "").strip()
+                if not _valid_profile_name(name):
+                    self._json_response(
+                        {
+                            "error": "Invalid profile name. Use only letters, numbers, spaces, hyphens, and underscores."
+                        },
+                        status=400,
+                    )
+                    return
+                save_profile(name)
+                global CURRENT_PROFILE
+                CURRENT_PROFILE = name
+                self._json_response(
+                    {
+                        "ok": True,
+                        "profiles": list_profiles(),
+                        "current_profile": CURRENT_PROFILE,
+                    }
+                )
+            except (json.JSONDecodeError, TypeError) as e:
+                self._json_response({"error": str(e)}, status=400)
+            return
+
+        if path == "/api/profiles/load":
+            length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(length)
+            try:
+                data = json.loads(body)
+                name = data.get("name", "").strip()
+                load_profile(name)
+                self._json_response(
+                    {
+                        "ok": True,
+                        "config": read_ini(),
+                        "current_profile": CURRENT_PROFILE,
+                    }
+                )
+            except FileNotFoundError as e:
+                self._json_response({"error": str(e)}, status=404)
+            except (json.JSONDecodeError, TypeError) as e:
+                self._json_response({"error": str(e)}, status=400)
+            return
+
+        if path == "/api/profiles/delete":
+            length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(length)
+            try:
+                data = json.loads(body)
+                name = data.get("name", "").strip()
+                delete_profile(name)
+                self._json_response(
+                    {
+                        "ok": True,
+                        "profiles": list_profiles(),
+                        "current_profile": CURRENT_PROFILE,
+                    }
+                )
+            except FileNotFoundError as e:
+                self._json_response({"error": str(e)}, status=404)
+            except (json.JSONDecodeError, TypeError) as e:
+                self._json_response({"error": str(e)}, status=400)
+            return
+
         self.send_response(404)
         self.end_headers()
 
 
 def main():
-    global INI_PATH
+    global INI_PATH, CURRENT_PROFILE
 
     default_ini = os.path.join(
         os.path.dirname(os.path.abspath(__file__)),
@@ -164,8 +285,13 @@ def main():
 
     parser = argparse.ArgumentParser(description="SDVX RGB Web API")
     parser.add_argument(
-        "ini",
+        "profile",
         nargs="?",
+        default=None,
+        help="Profile name to load on startup",
+    )
+    parser.add_argument(
+        "--ini",
         default=default_ini,
         help="Path to sdvxrgb.ini (default: %(default)s)",
     )
@@ -182,9 +308,21 @@ def main():
 
     INI_PATH = os.path.abspath(args.ini)
 
+    if args.profile:
+        profile_file = _profile_path(args.profile)
+        if os.path.exists(profile_file):
+            load_profile(args.profile)
+            print(f"  Loaded profile: {args.profile}")
+        else:
+            print(
+                f"  Warning: Profile '{args.profile}' not found, starting without profile"
+            )
+
     server = HTTPServer((args.host, args.port), Handler)
     print(f"SDVX RGB Web API")
     print(f"  INI path: {INI_PATH}")
+    if CURRENT_PROFILE:
+        print(f"  Active profile: {CURRENT_PROFILE}")
     print(f"  Listening on http://{args.host}:{args.port}")
     try:
         server.serve_forever()
