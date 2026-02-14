@@ -398,3 +398,9 @@ FodyWeavers.xsd
 
 # JetBrains Rider
 *.sln.iml
+
+# Python virtual environments
+Tools/env/
+
+# Claude Code
+.claude/

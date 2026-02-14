@@ -1,10 +1,15 @@
 ﻿#include <Windows.h>
 #include <MinHook.h>
 #include <cstdint>
+#include "transform.h"
 
 // shared memory
 HANDLE hMapFile;
 uint8_t* lpBase = nullptr;
+
+// transform config (loaded from sdvxrgb.ini next to the DLL)
+TransformConfig g_transformConfig;
+HMODULE g_hModule = nullptr;
 
 /*
 * index mapping
@@ -36,18 +41,35 @@ SetTapeLedData_t fpOriginal = nullptr;
 
 // Hook function
 void __fastcall SetTapeLedDataHook(void* This, unsigned int index, uint8_t* data) {
-    if (lpBase && index < 10) {
-        // Copy data into shared memory
-        memcpy(lpBase + TapeLedDataOffset[index], data, TapeLedDataCount[index]);
+    if (index < 10) {
+        // Check for config hot-reload
+        CheckReload(g_transformConfig);
+
+        // Copy strip data to a local buffer and apply transforms
+        uint8_t transformed[282]; // largest strip: ctrl_panel = 94 * 3 = 282
+        int count = TapeLedDataCount[index];
+        memcpy(transformed, data, count);
+        TransformStrip(g_transformConfig.strips[index], transformed, count);
+
+        // Write transformed data to shared memory
+        if (lpBase) {
+            memcpy(lpBase + TapeLedDataOffset[index], transformed, count);
+        }
+
+        // Pass transformed data to original function
+        fpOriginal(This, index, transformed);
+        return;
     }
 
-    // Call original function
+    // Index out of range — pass through unchanged
     fpOriginal(This, index, data);
 }
 
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID lpReserved) {
     switch (reason) {
     case DLL_PROCESS_ATTACH: {
+        g_hModule = hModule;
+
         // Init MinHook
         if (MH_Initialize() != MH_OK) {
             return FALSE;
@@ -95,6 +117,10 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID lpReserved) {
                 1284   // buffer size
             ));
         }
+
+        // Init transform config from sdvxrgb.ini
+        InitConfig(g_transformConfig, hModule);
+        LoadConfig(g_transformConfig);
 
         break;
     }
