@@ -88,6 +88,7 @@
                 cursor: pointer;
                 user-select: none;
             }
+            .strip-header h2,
             .strip-header h3 {
                 font-size: 1rem;
                 flex: 1;
@@ -313,33 +314,7 @@
                     options: CHANNEL_ORDERS,
                     default: "",
                 },
-                {
-                    key: "gamma_r",
-                    label: "Gamma R",
-                    type: "number",
-                    step: "0.1",
-                    min: "0.1",
-                    max: "5.0",
-                    default: "",
-                },
-                {
-                    key: "gamma_g",
-                    label: "Gamma G",
-                    type: "number",
-                    step: "0.1",
-                    min: "0.1",
-                    max: "5.0",
-                    default: "",
-                },
-                {
-                    key: "gamma_b",
-                    label: "Gamma B",
-                    type: "number",
-                    step: "0.1",
-                    min: "0.1",
-                    max: "5.0",
-                    default: "",
-                },
+
                 {
                     key: "hue_shift",
                     label: "Hue Shift",
@@ -371,6 +346,36 @@
                     help: "0-200 (100 = normal)",
                 },
                 {
+                    key: "contrast",
+                    label: "Contrast",
+                    type: "number",
+                    step: "1",
+                    min: "0",
+                    max: "200",
+                    default: "",
+                    help: "0-200 (100 = normal, >100 = stronger pulse)",
+                },
+                {
+                    key: "fade_in",
+                    label: "Fade In",
+                    type: "number",
+                    step: "10",
+                    min: "0",
+                    max: "5000",
+                    default: "",
+                    help: "ms (0 = instant, default 0)",
+                },
+                {
+                    key: "fade_out",
+                    label: "Fade Out",
+                    type: "number",
+                    step: "10",
+                    min: "0",
+                    max: "5000",
+                    default: "",
+                    help: "ms (0 = instant, default 0)",
+                },
+                {
                     key: "static_color",
                     label: "Static Color",
                     type: "color",
@@ -382,6 +387,43 @@
                     type: "color",
                     default: "",
                     help: "Requires static_color",
+                },
+                {
+                    key: "pulse_color",
+                    label: "Pulse Color",
+                    type: "color",
+                    default: "",
+                    help: "Traveling pulse on beat",
+                },
+                {
+                    key: "pulse_speed",
+                    label: "Pulse Speed",
+                    type: "number",
+                    step: "10",
+                    min: "10",
+                    max: "1000",
+                    default: "",
+                    help: "LEDs/sec (default 150)",
+                },
+                {
+                    key: "pulse_width",
+                    label: "Pulse Width",
+                    type: "number",
+                    step: "0.5",
+                    min: "0",
+                    max: "50",
+                    default: "",
+                    help: "Solid center half-width in LEDs (default 2)",
+                },
+                {
+                    key: "pulse_fade",
+                    label: "Pulse Fade",
+                    type: "number",
+                    step: "0.5",
+                    min: "0.5",
+                    max: "50",
+                    default: "",
+                    help: "Fade length beyond center in LEDs (default 4)",
                 },
             ];
 
@@ -608,12 +650,10 @@
                 h.textContent = STRIP_LABELS[section] || section;
                 header.appendChild(h);
 
-                if (!isGlobal) {
-                    const toggle = document.createElement("span");
-                    toggle.className = "strip-toggle";
-                    toggle.textContent = "expand";
-                    header.appendChild(toggle);
-                }
+                const toggle = document.createElement("span");
+                toggle.className = "strip-toggle";
+                toggle.textContent = isGlobal ? "collapse" : "expand";
+                header.appendChild(toggle);
 
                 card.appendChild(header);
 
@@ -638,14 +678,12 @@
 
                 card.appendChild(body);
 
-                if (!isGlobal) {
-                    header.addEventListener("click", () => {
-                        const open = body.classList.toggle("open");
-                        header.querySelector(".strip-toggle").textContent = open
-                            ? "collapse"
-                            : "expand";
-                    });
-                }
+                header.addEventListener("click", () => {
+                    const open = body.classList.toggle("open");
+                    header.querySelector(".strip-toggle").textContent = open
+                        ? "collapse"
+                        : "expand";
+                });
 
                 return card;
             }

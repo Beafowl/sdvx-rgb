@@ -42,8 +42,15 @@ STRIP_KEYS = [
     "hue_shift",
     "saturation",
     "brightness",
+    "contrast",
+    "fade_in",
+    "fade_out",
     "static_color",
     "gradient_color",
+    "pulse_color",
+    "pulse_speed",
+    "pulse_width",
+    "pulse_fade",
 ]
 
 INI_PATH = ""

@@ -96,11 +96,13 @@ static void LoadStripFromSection(StripTransform& strip, const char* section,
     strip.hue_shift = GetPrivateProfileIntA(section, "hue_shift", defaults.hue_shift, path);
     strip.saturation = GetPrivateProfileIntA(section, "saturation", defaults.saturation, path);
     strip.brightness = GetPrivateProfileIntA(section, "brightness", defaults.brightness, path);
+    strip.contrast = GetPrivateProfileIntA(section, "contrast", defaults.contrast, path);
 
     // Clamp values
     strip.hue_shift = ((strip.hue_shift % 360) + 360) % 360;
     strip.saturation = std::min(std::max(strip.saturation, 0), 200);
     strip.brightness = std::min(std::max(strip.brightness, 0), 200);
+    strip.contrast = std::min(std::max(strip.contrast, 0), 200);
 
     // Parse static_color (hex RGB like "8000FF" or "#8000FF")
     char colorStr[16];
@@ -126,6 +128,30 @@ static void LoadStripFromSection(StripTransform& strip, const char* section,
         strip.gradient_b2 = defaults.gradient_b2;
     }
 
+    // Parse pulse_color
+    char pulseStr[16];
+    GetPrivateProfileStringA(section, "pulse_color", "", pulseStr, sizeof(pulseStr), path);
+    if (ParseHexColor(pulseStr, strip.pulse_r, strip.pulse_g, strip.pulse_b)) {
+        strip.pulse_color_enabled = true;
+    } else {
+        strip.pulse_color_enabled = defaults.pulse_color_enabled;
+        strip.pulse_r = defaults.pulse_r;
+        strip.pulse_g = defaults.pulse_g;
+        strip.pulse_b = defaults.pulse_b;
+    }
+
+    strip.pulse_speed = GetProfileFloat(section, "pulse_speed", defaults.pulse_speed, path);
+    strip.pulse_width = GetProfileFloat(section, "pulse_width", defaults.pulse_width, path);
+    strip.pulse_fade = GetProfileFloat(section, "pulse_fade", defaults.pulse_fade, path);
+    strip.pulse_speed = std::max(strip.pulse_speed, 10.0f);
+    strip.pulse_width = std::max(strip.pulse_width, 0.0f);
+    strip.pulse_fade = std::max(strip.pulse_fade, 0.5f);
+
+    strip.fade_in = GetProfileFloat(section, "fade_in", defaults.fade_in, path);
+    strip.fade_out = GetProfileFloat(section, "fade_out", defaults.fade_out, path);
+    strip.fade_in = std::max(strip.fade_in, 0.0f);
+    strip.fade_out = std::max(strip.fade_out, 0.0f);
+
     // Build gamma LUTs
     BuildGammaLUT(strip.lut_r, strip.gamma_r);
     BuildGammaLUT(strip.lut_g, strip.gamma_g);
@@ -139,8 +165,12 @@ static void LoadStripFromSection(StripTransform& strip, const char* section,
                      strip.hue_shift != 0 ||
                      strip.saturation != 100 ||
                      strip.brightness != 100 ||
+                     strip.contrast != 100 ||
                      strip.static_color_enabled ||
-                     strip.gradient_enabled);
+                     strip.gradient_enabled ||
+                     strip.pulse_color_enabled ||
+                     strip.fade_in > 0.0f ||
+                     strip.fade_out > 0.0f);
 }
 
 void InitConfig(TransformConfig& config, HMODULE hModule) {
@@ -170,6 +200,7 @@ void InitConfig(TransformConfig& config, HMODULE hModule) {
         config.strips[i].hue_shift = 0;
         config.strips[i].saturation = 100;
         config.strips[i].brightness = 100;
+        config.strips[i].contrast = 100;
         config.strips[i].static_color_enabled = false;
         config.strips[i].static_r = 0;
         config.strips[i].static_g = 0;
@@ -178,6 +209,15 @@ void InitConfig(TransformConfig& config, HMODULE hModule) {
         config.strips[i].gradient_r2 = 0;
         config.strips[i].gradient_g2 = 0;
         config.strips[i].gradient_b2 = 0;
+        config.strips[i].pulse_color_enabled = false;
+        config.strips[i].pulse_r = 0;
+        config.strips[i].pulse_g = 0;
+        config.strips[i].pulse_b = 0;
+        config.strips[i].pulse_speed = 150.0f;
+        config.strips[i].pulse_width = 2.0f;
+        config.strips[i].pulse_fade = 4.0f;
+        config.strips[i].fade_in = 0.0f;
+        config.strips[i].fade_out = 0.0f;
         BuildGammaLUT(config.strips[i].lut_r, 1.0f);
         BuildGammaLUT(config.strips[i].lut_g, 1.0f);
         BuildGammaLUT(config.strips[i].lut_b, 1.0f);
@@ -216,6 +256,7 @@ void LoadConfig(TransformConfig& config) {
     globalDefaults.hue_shift = 0;
     globalDefaults.saturation = 100;
     globalDefaults.brightness = 100;
+    globalDefaults.contrast = 100;
     globalDefaults.static_color_enabled = false;
     globalDefaults.static_r = 0;
     globalDefaults.static_g = 0;
@@ -224,6 +265,15 @@ void LoadConfig(TransformConfig& config) {
     globalDefaults.gradient_r2 = 0;
     globalDefaults.gradient_g2 = 0;
     globalDefaults.gradient_b2 = 0;
+    globalDefaults.pulse_color_enabled = false;
+    globalDefaults.pulse_r = 0;
+    globalDefaults.pulse_g = 0;
+    globalDefaults.pulse_b = 0;
+    globalDefaults.pulse_speed = 150.0f;
+    globalDefaults.pulse_width = 2.0f;
+    globalDefaults.pulse_fade = 4.0f;
+    globalDefaults.fade_in = 0.0f;
+    globalDefaults.fade_out = 0.0f;
     LoadStripFromSection(globalDefaults, "global", globalDefaults, iniPathA);
 
     // Load per-strip settings, falling back to [global] values
@@ -254,6 +304,7 @@ void CheckReload(TransformConfig& config) {
                 config.strips[i].hue_shift = 0;
                 config.strips[i].saturation = 100;
                 config.strips[i].brightness = 100;
+                config.strips[i].contrast = 100;
                 config.strips[i].static_color_enabled = false;
                 config.strips[i].static_r = 0;
                 config.strips[i].static_g = 0;
@@ -262,6 +313,15 @@ void CheckReload(TransformConfig& config) {
                 config.strips[i].gradient_r2 = 0;
                 config.strips[i].gradient_g2 = 0;
                 config.strips[i].gradient_b2 = 0;
+                config.strips[i].pulse_color_enabled = false;
+                config.strips[i].pulse_r = 0;
+                config.strips[i].pulse_g = 0;
+                config.strips[i].pulse_b = 0;
+                config.strips[i].pulse_speed = 150.0f;
+                config.strips[i].pulse_width = 2.0f;
+                config.strips[i].pulse_fade = 4.0f;
+                config.strips[i].fade_in = 0.0f;
+                config.strips[i].fade_out = 0.0f;
                 BuildGammaLUT(config.strips[i].lut_r, 1.0f);
                 BuildGammaLUT(config.strips[i].lut_g, 1.0f);
                 BuildGammaLUT(config.strips[i].lut_b, 1.0f);
@@ -339,11 +399,26 @@ static void HSVtoRGB(int h, int s, int v, uint8_t& r, uint8_t& g, uint8_t& b) {
     }
 }
 
-void TransformStrip(const StripTransform& strip, uint8_t* data, int numBytes) {
-    if (!strip.enabled)
+void TransformStrip(const StripTransform& strip, uint8_t* data, int numBytes,
+                    const PulseRender& pulse) {
+    if (!strip.enabled && pulse.count == 0)
         return;
 
     bool needHSV = (strip.hue_shift != 0 || strip.saturation != 100);
+    bool needContrast = (strip.contrast != 100);
+
+    // Precompute contrast LUT: maps V (0-255) to adjusted V
+    // exponent = 100/contrast, so contrast>100 -> exponent<1 -> brights expand, darks compress
+    uint8_t contrastLUT[256];
+    if (needContrast) {
+        float exponent = 100.0f / static_cast<float>(strip.contrast);
+        for (int j = 0; j < 256; j++) {
+            float normalized = static_cast<float>(j) / 255.0f;
+            float adjusted = powf(normalized, exponent);
+            int val = static_cast<int>(adjusted * 255.0f + 0.5f);
+            contrastLUT[j] = static_cast<uint8_t>(std::min(std::max(val, 0), 255));
+        }
+    }
 
     // Precompute static/gradient color's H and S if needed
     int staticH1 = 0, staticS1 = 0, staticV1 = 0;
@@ -373,7 +448,6 @@ void TransformStrip(const StripTransform& strip, uint8_t* data, int numBytes) {
             default:     cr = r; cg = g; cb = b; break;
         }
 
-        // Step 2: Gamma correction (LUT)
         cr = strip.lut_r[cr];
         cg = strip.lut_g[cg];
         cb = strip.lut_b[cb];
@@ -382,6 +456,9 @@ void TransformStrip(const StripTransform& strip, uint8_t* data, int numBytes) {
         if (strip.static_color_enabled) {
             int h, s, v;
             RGBtoHSV(cr, cg, cb, h, s, v);
+
+            if (needContrast)
+                v = contrastLUT[v];
 
             if (strip.gradient_enabled && numLEDs > 1) {
                 // Interpolate H and S between color 1 and color 2 based on LED position
@@ -397,11 +474,15 @@ void TransformStrip(const StripTransform& strip, uint8_t* data, int numBytes) {
                 // Single static color
                 HSVtoRGB(staticH1, staticS1, v, cr, cg, cb);
             }
-        } else if (needHSV) {
+        } else if (needHSV || needContrast) {
             int h, s, v;
             RGBtoHSV(cr, cg, cb, h, s, v);
 
-            h = (h + strip.hue_shift) % 360;
+            if (needContrast)
+                v = contrastLUT[v];
+
+            if (strip.hue_shift != 0)
+                h = (h + strip.hue_shift) % 360;
 
             if (strip.saturation != 100) {
                 s = (s * strip.saturation) / 100;
@@ -424,5 +505,37 @@ void TransformStrip(const StripTransform& strip, uint8_t* data, int numBytes) {
         data[i] = cr;
         data[i + 1] = cg;
         data[i + 2] = cb;
+    }
+
+    // Pulse rendering pass — solid center + cosine fade edges, additive blend
+    if (pulse.count > 0) {
+        int numLEDsForPulse = numBytes / 3;
+        float totalHalf = pulse.width + pulse.fade; // total half-span
+
+        for (int p = 0; p < pulse.count; p++) {
+            float pos = pulse.positions[p];
+            int minLED = std::max(0, static_cast<int>(pos - totalHalf));
+            int maxLED = std::min(numLEDsForPulse - 1, static_cast<int>(pos + totalHalf));
+
+            for (int led = minLED; led <= maxLED; led++) {
+                float dist = fabsf(static_cast<float>(led) - pos);
+                float blend;
+                if (dist <= pulse.width) {
+                    // Solid center
+                    blend = 1.0f;
+                } else if (dist < totalHalf) {
+                    // Cosine fade zone
+                    float t = (dist - pulse.width) / pulse.fade;
+                    blend = 0.5f * (1.0f + cosf(t * 3.14159265f));
+                } else {
+                    continue;
+                }
+
+                int idx = led * 3;
+                data[idx]     = static_cast<uint8_t>(std::min(255, data[idx]     + static_cast<int>(pulse.r * blend)));
+                data[idx + 1] = static_cast<uint8_t>(std::min(255, data[idx + 1] + static_cast<int>(pulse.g * blend)));
+                data[idx + 2] = static_cast<uint8_t>(std::min(255, data[idx + 2] + static_cast<int>(pulse.b * blend)));
+            }
+        }
     }
 }

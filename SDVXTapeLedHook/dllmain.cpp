@@ -11,6 +11,30 @@ uint8_t* lpBase = nullptr;
 TransformConfig g_transformConfig;
 HMODULE g_hModule = nullptr;
 
+// Fade state for smooth LED activation/deactivation transitions
+static constexpr int MAX_LEDS = 94; // largest strip: ctrl_panel = 94 LEDs
+struct StripFadeState {
+    float factor[MAX_LEDS];          // current fade factor per LED (0.0-1.0)
+    uint8_t lastColor[MAX_LEDS * 3]; // last non-zero color (for fade-out)
+    bool initialized;
+    LARGE_INTEGER lastTime;
+};
+
+static StripFadeState g_fadeState[10] = {};
+
+// Pulse state for beat-triggered traveling pulses (multiple per strip)
+struct StripPulseState {
+    bool seeded;                        // has prevBrightness been initialized?
+    float prevBrightness;               // average brightness of previous frame
+    LARGE_INTEGER lastTime;             // QPC timestamp of last update
+    int pulseCount;                     // number of active pulses
+    float positions[MAX_PULSES];        // position of each active pulse
+};
+
+static StripPulseState g_pulseState[10] = {};
+static LARGE_INTEGER g_qpcFreq = {};
+static constexpr float BEAT_THRESHOLD = 15.0f;
+
 /*
 * index mapping
 *
@@ -45,11 +69,138 @@ void __fastcall SetTapeLedDataHook(void* This, unsigned int index, uint8_t* data
         // Check for config hot-reload
         CheckReload(g_transformConfig);
 
+        const StripTransform& strip = g_transformConfig.strips[index];
+        int count = TapeLedDataCount[index];
+        int numLEDs = count / 3;
+
+        // Beat detection and pulse update
+        PulseRender pulse = {};
+        if (strip.pulse_color_enabled) {
+            StripPulseState& ps = g_pulseState[index];
+
+            // Compute average brightness of raw incoming data
+            int sum = 0;
+            for (int i = 0; i < count; i++)
+                sum += data[i];
+            float avgBrightness = static_cast<float>(sum) / static_cast<float>(count);
+
+            LARGE_INTEGER now;
+            QueryPerformanceCounter(&now);
+
+            if (!ps.seeded) {
+                // First call — seed brightness, don't trigger
+                ps.prevBrightness = avgBrightness;
+                ps.lastTime = now;
+                ps.seeded = true;
+            } else {
+                // Compute elapsed time
+                float elapsed = static_cast<float>(now.QuadPart - ps.lastTime.QuadPart)
+                              / static_cast<float>(g_qpcFreq.QuadPart);
+                if (elapsed > 0.1f) elapsed = 0.1f; // clamp to 100ms
+                ps.lastTime = now;
+
+                // Advance all active pulses and remove finished ones
+                float limit = static_cast<float>(numLEDs);
+                int write = 0;
+                for (int j = 0; j < ps.pulseCount; j++) {
+                    ps.positions[j] += strip.pulse_speed * elapsed;
+                    if (ps.positions[j] < limit) {
+                        ps.positions[write++] = ps.positions[j];
+                    }
+                }
+                ps.pulseCount = write;
+
+                // Check for beat: brightness rising above threshold
+                float delta = avgBrightness - ps.prevBrightness;
+                if (delta > BEAT_THRESHOLD && ps.pulseCount < MAX_PULSES) {
+                    ps.positions[ps.pulseCount++] = 0.0f;
+                }
+
+                ps.prevBrightness = avgBrightness;
+            }
+
+            // Build render info
+            if (ps.pulseCount > 0) {
+                pulse.count = ps.pulseCount;
+                for (int j = 0; j < ps.pulseCount; j++)
+                    pulse.positions[j] = ps.positions[j];
+                pulse.width = strip.pulse_width;
+                pulse.fade = strip.pulse_fade;
+                pulse.r = strip.pulse_r;
+                pulse.g = strip.pulse_g;
+                pulse.b = strip.pulse_b;
+            }
+        }
+
         // Copy strip data to a local buffer and apply transforms
         uint8_t transformed[282]; // largest strip: ctrl_panel = 94 * 3 = 282
-        int count = TapeLedDataCount[index];
         memcpy(transformed, data, count);
-        TransformStrip(g_transformConfig.strips[index], transformed, count);
+        TransformStrip(strip, transformed, count, pulse);
+
+        // Apply fade in/out if configured
+        if (strip.fade_in > 0.0f || strip.fade_out > 0.0f) {
+            StripFadeState& fs = g_fadeState[index];
+
+            LARGE_INTEGER now;
+            QueryPerformanceCounter(&now);
+
+            if (!fs.initialized) {
+                // First call — initialize all factors based on current state
+                for (int i = 0; i < numLEDs; i++) {
+                    int idx = i * 3;
+                    bool active = (transformed[idx] | transformed[idx + 1] | transformed[idx + 2]) != 0;
+                    fs.factor[i] = active ? 1.0f : 0.0f;
+                    fs.lastColor[idx] = transformed[idx];
+                    fs.lastColor[idx + 1] = transformed[idx + 1];
+                    fs.lastColor[idx + 2] = transformed[idx + 2];
+                }
+                fs.lastTime = now;
+                fs.initialized = true;
+            } else {
+                float elapsed = static_cast<float>(now.QuadPart - fs.lastTime.QuadPart)
+                              / static_cast<float>(g_qpcFreq.QuadPart);
+                if (elapsed > 0.1f) elapsed = 0.1f; // clamp to 100ms
+                fs.lastTime = now;
+
+                for (int i = 0; i < numLEDs; i++) {
+                    int idx = i * 3;
+                    bool active = (transformed[idx] | transformed[idx + 1] | transformed[idx + 2]) != 0;
+
+                    if (active) {
+                        // Save the current color for potential future fade-out
+                        fs.lastColor[idx] = transformed[idx];
+                        fs.lastColor[idx + 1] = transformed[idx + 1];
+                        fs.lastColor[idx + 2] = transformed[idx + 2];
+
+                        // Ramp factor toward 1.0
+                        if (strip.fade_in > 0.0f && fs.factor[i] < 1.0f) {
+                            fs.factor[i] += (elapsed * 1000.0f) / strip.fade_in;
+                            if (fs.factor[i] > 1.0f) fs.factor[i] = 1.0f;
+                        } else {
+                            fs.factor[i] = 1.0f;
+                        }
+
+                        // Apply fade factor to the transformed color
+                        transformed[idx]     = static_cast<uint8_t>(transformed[idx]     * fs.factor[i]);
+                        transformed[idx + 1] = static_cast<uint8_t>(transformed[idx + 1] * fs.factor[i]);
+                        transformed[idx + 2] = static_cast<uint8_t>(transformed[idx + 2] * fs.factor[i]);
+                    } else {
+                        // Ramp factor toward 0.0
+                        if (strip.fade_out > 0.0f && fs.factor[i] > 0.0f) {
+                            fs.factor[i] -= (elapsed * 1000.0f) / strip.fade_out;
+                            if (fs.factor[i] < 0.0f) fs.factor[i] = 0.0f;
+                        } else {
+                            fs.factor[i] = 0.0f;
+                        }
+
+                        // Output last known color scaled by fade factor
+                        transformed[idx]     = static_cast<uint8_t>(fs.lastColor[idx]     * fs.factor[i]);
+                        transformed[idx + 1] = static_cast<uint8_t>(fs.lastColor[idx + 1] * fs.factor[i]);
+                        transformed[idx + 2] = static_cast<uint8_t>(fs.lastColor[idx + 2] * fs.factor[i]);
+                    }
+                }
+            }
+        }
 
         // Write transformed data to shared memory
         if (lpBase) {
@@ -121,6 +272,9 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID lpReserved) {
         // Init transform config from sdvxrgb.ini
         InitConfig(g_transformConfig, hModule);
         LoadConfig(g_transformConfig);
+
+        // Init QPC frequency for pulse timing
+        QueryPerformanceFrequency(&g_qpcFreq);
 
         break;
     }
